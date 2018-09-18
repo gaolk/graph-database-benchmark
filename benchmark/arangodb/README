@@ -1,0 +1,181 @@
+############################################################
+# Copyright (c)  2015-now, TigerGraph Inc.
+# All rights reserved
+# It is provided as it is for benchmark reproducible purpose.
+# anyone can use it for benchmark purpose with the 
+# acknowledgement to TigerGraph.
+# Author: Mingxi Wu mingxi.wu@tigergraph.com
+############################################################
+
+This article documents the details on how to reproduce the graph database benchmark result on ArangoDB. 
+
+Data Sets
+===========
+
+- graph500 edge file: http://service.tigergraph.com/download/benchmark/dataset/graph500-22/graph500-22
+- graph500 vertex file: http://service.tigergraph.com/download/benchmark/dataset/graph500-22/graph500-22_unique_node
+
+- twitter edge file: http://service.tigergraph.com/download/benchmark/dataset/twitter/twitter_rv.tar.gz
+- twitter vertex file: http://service.tigergraph.com/download/benchmark/dataset/twitter/twitter_rv.net_unique_node
+
+
+Hardware & Major enviroment
+================================
+- Amazon EC2 machine r4.8xlarge. 
+- OS Ubuntu 14.04.5 LTS
+- Java build 1.7.0_181
+- Python 2.7.6
+
+
+- 32vCPUs
+- 244GiB memory
+- attached a 300GiB  EBS-optimized Provisioned IOPS SSD (IO1), we set IOPS to 15k. 
+  Raw data and arangodb datafiles are put on this SSD. 
+
+ArangoDB Version
+==================
+- 3.3.13 Community edition downloaded from https://download.arangodb.com/arangodb33/xUbuntu_14.04
+- Java driver arangodb-java-driver-4.7.0-SNAPSHOT-standalone.jar (downloaded from https://github.com/arangodb/arangodb-java-driver)
+- SLF4J loggig library slf4j-simple-1.7.25.jar (downloaded from https://www.slf4j.org/download.html)
+
+Install ArangoDB 
+==================
+# add repository key
+wget https://www.arangodb.com/repositories/arangodb33/xUbuntu_14.04/Release.key
+sudo apt-key add Release.key
+ 
+# add apt repository
+sudo apt-add-repository 'deb https://www.arangodb.com/repositories/arangodb33/xUbuntu_14.04/ /'
+sudo apt-get update
+ 
+# install ArangoDB
+# set password="root" for the root user
+# storage engine choose mmfiles or rocksdb (benchmark results provided for both storage options)
+sudo apt-get install arangodb3=3.3.13
+ 
+# check if installation went well
+curl http://root:root@localhost:8529/_api/version
+
+# output should look like this
+{"server":"arango","version":"3.3.13","license":"community"}
+
+Setup ebs volume as database directory for ArangoDB
+=====================================================
+# switch to root
+sudo bash
+ 
+# create new database directory
+mkdir /ebs/arangodb
+chmod 777 -R /ebs
+ 
+# create symbolic link to this directory from ArangoDB default database directory /var/lib/arangodb3
+cd /var/lib
+mv arangodb3 /ebs/arangodb
+ln -s /ebs/arangodb/arangodb3/ arangodb3
+ 
+# exit root
+exit
+
+# restart arangodb
+sudo service arangodb3 restart
+
+Run benchmark 
+================
+Download all files in the README folder to a script folder.
+
+Before running the benchmark script below, please make sure the current user has the READ permission from the raw file, 
+and the WRITE permission on the folder where you put the benchmark script folder, since the random seed will be generted in this folder.
+
+You may consider to make ssh config to keep it alive by following, since the benchmark will run long time.
+https://www.howtogeek.com/howto/linux/keep-your-linux-ssh-session-from-disconnecting/
+
+Load Data
+-----------------
+Download dataset in the same folder where all the benchmark files are.
+
+# download graph500 dataset
+wget http://service.tigergraph.com/download/benchmark/dataset/graph500-22/graph500-22
+wget http://service.tigergraph.com/download/benchmark/dataset/graph500-22/graph500-22_unique_node
+ 
+ 
+# download twitter dataset
+wget http://service.tigergraph.com/download/benchmark/dataset/twitter/twitter_rv.tar.gz
+wget http://service.tigergraph.com/download/benchmark/dataset/twitter/twitter_rv.net_unique_node
+tar -xzf twitter_rv.tar.gz
+
+ArangoDB requires input files to have headers.
+
+# Add headers to graph500 dataset files
+sed -i '1i _key' graph500-22_unique_node
+sed -i '1i _from\t_to' graph500-22
+ 
+# Add headers to twitter dataset files
+sed -i '1i _key' twitter_rv.net_unique_node
+sed -i '1i _from\t_to' twitter_rv.net
+
+RUN load scripts.
+
+# to load graph500 data
+ bash load_graph500.sh
+ 
+# to load twitter data
+ bash load_twitter.sh
+
+CHECK storage size.
+
+# mmfiles engine
+# run this arangosh command to find out the id of a database to use it later (replace database_name)
+arangosh --server.database "database_name" --server.password "root" --javascript.execute-string "print(db._id())"
+
+# and now run these commands under root user (use database id retrieved earlier instead of database_id_number)
+cd /ebs/arangodb/arangodb3/databases
+du -hc database-database_id_number
+
+# rocksdb engine
+# run under root user (datafiles from all databases stored under the same folder)
+cd /ebs/arangodb/arangodb3
+du -hc engine-rocksdb
+
+Graph500
+-----------------
+# khop (output file has format khopResults_graph500_k)
+# compile (if necessary)
+javac -cp \* khop.java
+
+# to run all khop queries on graph500 (k=1,2 average over 300 seeds, k=3,6 average over 10 seeds)
+bash run_khop.sh graph500
+
+# OR alternatively to run one query only use the following command with arguments 
+java -cp .:\* khop graph_name depth timeout_seconds
+
+# examples
+java -cp .:\* khop graph500 1 180
+java -cp .:\* khop graph500 3 9000
+
+# wcc
+bash run_pg_wcc.sh graph500 wcc
+
+# pagerank
+bash run_pg_wcc.sh graph500 pagerank
+
+Twitter
+-------------
+# khop (output file has format khopResults_twitter_k)
+# compile (if necessary)
+javac -cp \* khop.java
+
+# to run all khop queries on twitter (k=1,2 average over 300 seeds, k=3,6 average over 10 seeds)
+bash run_khop.sh twitter
+
+# OR alternatively to run one query only use the following command with arguments
+java -cp .:\* khop graph_name depth timeout_seconds
+
+# examples
+java -cp .:\* khop twitter 1 180
+java -cp .:\* khop twitter 3 9000
+
+# wcc
+bash run_pg_wcc.sh twitter wcc
+
+# pagerank
+bash run_pg_wcc.sh twitter pagerank
